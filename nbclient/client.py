@@ -805,11 +805,16 @@ class NotebookClient(LoggingConfigurable):
                     flush_io(self.kc)
 
                     self.kc.input(input(msg['content']['prompt']))
-                    msg = await self.kc.get_iopub_msg(timeout=1)
-                    if msg.get('content', {}).get('text'):
-                        print(msg['content']['text'])
+
+                    try:
+                        msg = await self.kc.get_iopub_msg(timeout=1)
+                    except Empty:
+                        pass
                     else:
-                        print(msg['content'])
+                        if msg.get('content', {}).get('text'):
+                            print(msg['content']['text'])
+                        else:
+                            print(msg['content'])
         else:
             print('no message!')
 
