@@ -801,13 +801,15 @@ class NotebookClient(LoggingConfigurable):
                 except Empty:
                     break
                 else:
-                    print('got stdin message!')
+                    # flush io
+                    flush_io(self.kc)
+
                     self.kc.input(input(msg['content']['prompt']))
                     msg = await self.kc.get_iopub_msg(timeout=1)
-                    print(msg['content'])
-                    # print(msg)
-                    # await self._async_poll_output_msg(parent_msg_id, cell,
-                    #   cell_index)
+                    if msg.get('content', {}).get('text'):
+                        print(msg['content']['text'])
+                    else:
+                        print(msg['content'])
         else:
             print('no message!')
 
@@ -1301,3 +1303,105 @@ def execute(
         resources['metadata'] = {'path': cwd}
     return NotebookClient(nb=nb, resources=resources, km=km,
                           **kwargs).execute()
+
+
+# taken from
+# https://github.com/jupyter/jupyter_console/blob/bcf17a3953844d75262e3ce23b784832d9044877/jupyter_console/ptshell.py#L846
+def flush_io(client):
+    import sys
+
+    while run_sync(client.iopub_channel.msg_ready)():
+        sub_msg = run_sync(client.iopub_channel.get_msg)()
+        msg_type = sub_msg['header']['msg_type']
+
+        _pending_clearoutput = True
+
+        # Update execution_count in case it changed in another session
+        # if msg_type == "execute_input":
+        #     self.execution_count = int(
+        #         sub_msg["content"]["execution_count"]) + 1
+
+        if True:  #self.include_output(sub_msg):
+            if msg_type == 'status':
+                # self._execution_state = sub_msg["content"]["execution_state"]
+                pass
+
+            elif msg_type == 'stream':
+                if sub_msg["content"]["name"] == "stdout":
+                    if _pending_clearoutput:
+                        print("\r", end="")
+                        _pending_clearoutput = False
+                    print(sub_msg["content"]["text"], end="")
+                    sys.stdout.flush()
+                elif sub_msg["content"]["name"] == "stderr":
+                    if _pending_clearoutput:
+                        print("\r", file=sys.stderr, end="")
+                        _pending_clearoutput = False
+                    print(sub_msg["content"]["text"], file=sys.stderr, end="")
+                    sys.stderr.flush()
+
+            elif msg_type == 'execute_result':
+                if _pending_clearoutput:
+                    print("\r", end="")
+                    _pending_clearoutput = False
+                # self.execution_count = int(
+                #     sub_msg["content"]["execution_count"])
+                # if not self.from_here(sub_msg):
+                # sys.stdout.write(self.other_output_prefix)
+                format_dict = sub_msg["content"]["data"]
+                # self.handle_rich_data(format_dict)
+
+                if 'text/plain' not in format_dict:
+                    continue
+
+                # prompt_toolkit writes the prompt at a slightly lower level,
+                # so flush streams first to ensure correct ordering.
+                sys.stdout.flush()
+                sys.stderr.flush()
+                # self.print_out_prompt()
+                text_repr = format_dict['text/plain']
+                if '\n' in text_repr:
+                    # For multi-line results, start a new line after prompt
+                    print()
+                print(text_repr)
+
+                # Remote: add new prompt
+                # if not self.from_here(sub_msg):
+                #     sys.stdout.write('\n')
+                #     sys.stdout.flush()
+                #     self.print_remote_prompt()
+
+            elif msg_type == 'display_data':
+                data = sub_msg["content"]["data"]
+                # handled = self.handle_rich_data(data)
+                # if not handled:
+                #     if not self.from_here(sub_msg):
+                #         sys.stdout.write(self.other_output_prefix)
+                #     # if it was an image, we handled it by now
+                #     if 'text/plain' in data:
+                #         print(data['text/plain'])
+
+            # If execute input: print it
+            elif msg_type == 'execute_input':
+                content = sub_msg['content']
+                # ec = content.get('execution_count', self.execution_count - 1)
+
+                # New line
+                sys.stdout.write('\n')
+                sys.stdout.flush()
+
+                # With `Remote In [3]: `
+                # self.print_remote_prompt(ec=ec)
+
+                # And the code
+                sys.stdout.write(content['code'] + '\n')
+
+            elif msg_type == 'clear_output':
+                if sub_msg["content"]["wait"]:
+                    _pending_clearoutput = True
+                else:
+                    print("\r", end="")
+
+            elif msg_type == 'error':
+                for frame in sub_msg["content"]["traceback"]:
+                    print(frame, file=sys.stderr)
